@@ -1,9 +1,11 @@
-// Keyboard + gamepad navigation. Spatial focus movement across [data-f] elements.
-let volume = 0.6, soundOn = true, ctx = null;
+// Keyboard + gamepad navigation for the FPEX shell.
+// Modes: 'ui' (shell), 'pause' (player pause menu), 'game' (shell input is ignored; the player reads input itself).
+let mode = 'ui', volume = 0.6, soundOn = true, ctx = null;
+export const setMode = m => { mode = m; };
 export const setVolume = (v, on) => { volume = v / 100; soundOn = on; };
 
 export function beep() {
-  if (!soundOn || volume <= 0) return;
+  if (!soundOn || volume <= 0 || mode === 'game') return;
   try {
     ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
     const o = ctx.createOscillator(), g = ctx.createGain();
@@ -14,7 +16,11 @@ export function beep() {
 }
 
 const visible = e => e.offsetParent !== null && !e.disabled;
-const root = () => { const d = document.getElementById('dlg'); return d.open ? d : document.body; };
+const root = () => {
+  if (mode === 'pause') return document.getElementById('pause') || document.body;
+  const d = document.getElementById('dlg');
+  return d.open ? d : document.body;
+};
 
 export function move(dir) {
   const els = [...root().querySelectorAll('[data-f]')].filter(visible);
@@ -37,14 +43,15 @@ export function move(dir) {
 export function initInput(h) {
   const dirs = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
   addEventListener('keydown', e => {
+    if (mode === 'game') return;
     const t = e.target, typing = (t.tagName === 'INPUT' && t.type === 'text') || t.tagName === 'TEXTAREA';
-    if (e.key === 'Escape') { h.back(); return; }
+    if (e.key === 'Escape') { mode === 'pause' ? h.pauseBack() : h.back(); return; }
     if (dirs[e.key]) {
       const lr = e.key === 'ArrowLeft' || e.key === 'ArrowRight';
       if (lr && (typing || t.type === 'range')) return;
       e.preventDefault(); move(dirs[e.key]); beep(); return;
     }
-    if (typing) return;
+    if (typing || mode === 'pause') return;
     if (e.key === '/') { e.preventDefault(); h.search(); }
     else if (e.key === 'f' || e.key === 'F') h.fav();
     else if (e.key === 'Backspace') h.back();
@@ -54,19 +61,20 @@ export function initInput(h) {
   (function poll() {
     const gp = [...(navigator.getGamepads?.() || [])].find(g => g && g.connected);
     if (gp) {
-      const b = i => !!gp.buttons[i]?.pressed, now = performance.now(), ax = gp.axes;
+      const b = i => !!gp.buttons[i]?.pressed, now = performance.now(), ax = gp.axes, fire = mode !== 'game';
       const d = { up: b(12) || ax[1] < -0.55, down: b(13) || ax[1] > 0.55, left: b(14) || ax[0] < -0.55, right: b(15) || ax[0] > 0.55 };
       for (const k in d) {
-        if (!d[k]) { next[k] = 0; continue; }
+        if (!d[k] || !fire) { next[k] = 0; continue; }
         if (!next[k] || now >= next[k]) { move(k); beep(); next[k] = now + (next[k] ? 130 : 380); }
       }
-      const edge = (i, fn) => { const p = b(i); if (p && !prev[i]) fn(); prev[i] = p; };
-      edge(0, () => document.activeElement?.click());   // A
-      edge(1, h.back);                                   // B
-      edge(2, h.fav);                                    // X
-      edge(3, h.search);                                 // Y
-      edge(9, h.menu);                                   // Start
-      edge(8, h.context);                                // Select
+      const edge = (i, fn) => { const p = b(i); if (p && !prev[i] && fire) fn(); prev[i] = p; };
+      const ui = fn => () => { if (mode === 'ui') fn(); };
+      edge(0, () => document.activeElement?.click());                 // A
+      edge(1, mode === 'pause' ? h.pauseBack : h.back);                // B
+      edge(2, ui(h.fav));                                              // X
+      edge(3, ui(h.search));                                           // Y
+      edge(9, mode === 'pause' ? h.pauseBack : ui(h.menu));            // Start
+      edge(8, ui(h.context));                                          // Select
     }
     requestAnimationFrame(poll);
   })();
